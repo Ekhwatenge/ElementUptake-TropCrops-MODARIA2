@@ -1,0 +1,111 @@
+---
+title: "Multi-Element Uptake Patterns in Tropical Crops: MODARIA II Dataset Analysis"
+author: "Elvira Khwatenge"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+## Introduction
+
+This report explores **multi-element transfer patterns** from soil to plants for common tropical crops using the IAEA MODARIA II dataset. We cluster crops by their multi-element uptake, identify hyperaccumulators, and relate these to soil properties-a holistic, novel approach for this dataset.
+
+## Data Loading and Cleaning
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(readr)
+library(janitor)
+df <- read_csv("iaea-modaria-ii-tropical-dataset.csv") %>% clean_names()
+```
+
+
+```{r}
+glimpse(df)
+```
+
+### Select and Clean Relevant Columns
+
+```{r}
+
+df_sel <- df %>%
+select(element, common_name, latin_name, compartment, c_plant, c_soil, country, site, om, p_h, clay)
+```
+
+```{r}
+df_sel <- df_sel %>%
+  suppressWarnings(as.numeric(c("1", "2", "X")))
+[1]  1  2 NA
+mutate(
+c_plant = as.numeric(c_plant),
+c_soil = as.numeric(c_soil),
+cr = c_plant / c_soil
+) %>%
+filter(!is.na(cr), cr > 0, is.finite(cr))
+```
+```{r}
+crop_matrix <- df_sel %>%
+group_by(common_name, latin_name, country, site, element) %>%
+summarize(mean_cr = mean(cr, na.rm=TRUE), .groups = "drop") %>%
+pivot_wider(names_from = element, values_from = mean_cr)
+```
+
+```{r}
+crop_matrix <- crop_matrix %>%
+filter(rowSums(!is.na(select(., -common_name, -latin_name, -country, -site))) >= 5)
+```
+
+
+## PCA and Clustering: Multi-Element Uptake Profiles
+
+
+```{r}
+library(FactoMineR)
+library(factoextra)
+```
+## Prepare data for PCA (remove ID columns)
+```{R}
+pca_data <- crop_matrix %>%
+select(-common_name, -latin_name, -country, -site) %>%
+mutate_all(~replace_na(., median(., na.rm=TRUE)))
+```
+
+## PCA
+```{r}
+res.pca <- PCA(pca_data, graph = FALSE)
+fviz_pca_ind(res.pca, label="none", habillage = crop_matrix$common_name, addEllipses = TRUE, ellipse.level = 0.95)
+```
+## K-means clustering (3 clusters)
+
+```{r}
+set.seed(42)
+km <- kmeans(pca_data, centers = 3)
+fviz_cluster(list(data = pca_data, cluster = km$cluster))
+```
+
+
+## Add cluster to matrix
+```{r}
+crop_matrix$cluster <- factor(km$cluster)
+```
+
+## Top 10% for at least 3 elements
+
+```{r}
+top10 <- function(x) x > quantile(x, 0.9, na.rm=TRUE)
+hyper <- crop_matrix %>%
+select(-common_name, -latin_name, -country, -site) %>%
+mutate_all(top10) %>%
+mutate(hyper_count = rowSums(.)) %>%
+filter(hyper_count >= 3)
+
+hyper_crops <- crop_matrix[which(rownames(crop_matrix) %in% rownames(hyper)),
+c("common_name", "latin_name", "country", "site")]
+knitr::kable(hyper_crops, caption = "Crops that are hyperaccumulators for at least 3 elements")
+```
